@@ -194,8 +194,6 @@ This is a demo/prank variation that makes the chatbot respond with a joke in Spa
 
 ---
 
----
-
 ### 5. Set Up a Flag Trigger (Optional)
 
 The app can automatically turn off a flag variation after the chatbot responds. This is useful for demos where you want to briefly show a "prank" variation, then have it revert.
@@ -211,14 +209,35 @@ When the chatbot generates a response while the `linked-in-transformer` variatio
 
 ### 6. Set Up the Experiment (This step can be done in the demo flow)
 
-To see the chatbot experiment in action:
+#### Create the Metric
 
-1. In LaunchDarkly, go to **Experiments** → **Create experiment**
+Before creating the experiment, you need a metric to measure conversions.
+
+1. In LaunchDarkly, go to **Metrics** → **Create metric**
+2. Fill in the following:
+
+| Setting | Value |
+|---|---|
+| **Event kind** | Custom |
+| **Event key** | `SoleMate-Purchases` |
+| **What do you want to measure?** | Count |
+| **Metric definition** | Average of event count per user where higher is better |
+| **Metric name** | SoleMate Purchases |
+| **Metric key** | `solemate-purchases` |
+| **Description** | Tracks purchase events fired from the cart checkout and the 150-user simulator |
+
+3. Click **Create metric**
+
+> The event key `SoleMate-Purchases` must match exactly — this is the key the app passes to `ldClient.track()` when a user checks out or during the 150-user simulation.
+
+#### Create the Experiment
+
+1. Go to **Experiments** → **Create experiment**
 2. Name it something like `Chatbot Purchase Conversion`
 3. Set the **hypothesis:** Users who see the chatbot will purchase more often
 4. Attach the **`show-chatbot`** flag as the experiment flag
 5. Set the rollout to **50/50** between `true` and `false`
-6. Add **`SoleMate-Purchases`** as the metric (create it under **Metrics** first if it doesn't exist)
+6. Add the **SoleMate Purchases** metric you just created
 7. Start the experiment
 
 **To generate experiment data:**
