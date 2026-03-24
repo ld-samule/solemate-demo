@@ -33,7 +33,7 @@ Before you begin, this guide assumes:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
+git clone https://github.com/ld-samule/solemate-demo.git
 cd YOUR_REPO_NAME
 ```
 
