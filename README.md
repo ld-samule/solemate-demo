@@ -34,7 +34,7 @@ Before you begin, this guide assumes:
 
 ```bash
 git clone https://github.com/ld-samule/solemate-demo.git
-cd YOUR_REPO_NAME
+cd solemate-demo
 ```
 
 ### 2. Install Dependencies
@@ -63,7 +63,7 @@ LD_TRIGGER_URL=your-launchdarkly-trigger-url-here
 |---|---|
 | `VITE_LAUNCHDARKLY_CLIENT_ID` | LaunchDarkly → **Projects** → your project → **Environments** → copy the **Client-side ID** (not the SDK key) |
 | `ANTHROPIC_API_KEY` | Anthropic Console → **API Keys** → create or copy a key |
-| `LD_TRIGGER_URL` | LaunchDarkly → **Feature Flags** → your flag → **Triggers** tab → copy the webhook URL (single-use; replace after each firing) |
+| `LD_TRIGGER_URL` | LaunchDarkly → **Feature Flags** → your flag → 3 dots on environment → configuration in environment → **Triggers** tab → Add Trigger → copy the webhook URL (single-use; replace after each firing) |
 
 > **Note:** `ANTHROPIC_API_KEY` and `LD_TRIGGER_URL` are server-side only (no `VITE_` prefix).
 > They are used by the Vite dev server proxy and never sent to the browser.
@@ -190,11 +190,26 @@ This variation turns the chatbot into a general shoe expert that never recommend
 Im using this prompt for testing. Answer the customer with a joke in spainish and then answer their question.
 ```
 
-This is a demo/prank variation that makes the chatbot respond with a joke in Spanish before answering. When this variation is active and the user sends a message, the app automatically fires the `LD_TRIGGER_URL` after 5 seconds to turn the flag off — reverting the chatbot to normal. See [Set Up a Flag Trigger](#6-set-up-a-flag-trigger-optional) for details.
+This is a demo/prank variation that makes the chatbot respond with a joke in Spanish before answering. When this variation is active and the user sends a message, the app automatically fires the `LD_TRIGGER_URL` after 5 seconds to turn the flag off — reverting the chatbot to normal. See [Set Up a Flag Trigger](#5-set-up-a-flag-trigger-optional) for details.
 
 ---
 
-### 5. Set Up the Experiment (Optional but Recommended)
+---
+
+### 5. Set Up a Flag Trigger (Optional)
+
+The app can automatically turn off a flag variation after the chatbot responds. This is useful for demos where you want to briefly show a "prank" variation, then have it revert.
+
+1. In LaunchDarkly, go to your flag → **Triggers** tab
+2. Create a trigger that turns off the flag (or changes its targeting)
+3. Copy the webhook URL and paste it into `LD_TRIGGER_URL` in your `.env`
+4. Restart the dev server
+
+When the chatbot generates a response while the `linked-in-transformer` variation is active, the app waits 5 seconds, then POSTs to the trigger URL. The trigger URL is single-use — replace it in `.env` after each firing.
+
+---
+
+### 6. Set Up the Experiment (This step can be done in the demo flow)
 
 To see the chatbot experiment in action:
 
@@ -215,19 +230,6 @@ To see the chatbot experiment in action:
 
 ---
 
-### 6. Set Up a Flag Trigger (Optional)
-
-The app can automatically turn off a flag variation after the chatbot responds. This is useful for demos where you want to briefly show a "prank" variation, then have it revert.
-
-1. In LaunchDarkly, go to your flag → **Triggers** tab
-2. Create a trigger that turns off the flag (or changes its targeting)
-3. Copy the webhook URL and paste it into `LD_TRIGGER_URL` in your `.env`
-4. Restart the dev server
-
-When the chatbot generates a response while the `linked-in-transformer` variation is active, the app waits 5 seconds, then POSTs to the trigger URL. The trigger URL is single-use — replace it in `.env` after each firing.
-
----
-
 ### 7. Run the App
 
 ```bash
@@ -237,6 +239,7 @@ npm run dev
 Open your browser to **http://localhost:5173**
 
 ---
+
 
 ## Feature Flag Reference
 
