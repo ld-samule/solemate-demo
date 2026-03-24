@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", sans-serif;
+  --font-display: "Bebas Neue", sans-serif;
+  --color-sole-red: #DA0000;
+}
+
+body {
+  @apply font-sans text-black bg-white antialiased;
+  margin: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+@property --gradient-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes ai-border-spin {
+  to {
+    --gradient-angle: 360deg;
+  }
+}
+
+.ai-border-glow {
+  position: relative;
+  background: conic-gradient(
+    from var(--gradient-angle),
+    #3b82f6,
+    #8b5cf6,
+    #06b6d4,
+    #3b82f6
+  );
+  animation: ai-border-spin 2.5s linear infinite;
+  padding: 2px;
+}
+
+.ai-border-glow::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: conic-gradient(
+    from var(--gradient-angle),
+    #3b82f6,
+    #8b5cf6,
+    #06b6d4,
+    #3b82f6
+  );
+  animation: ai-border-spin 2.5s linear infinite;
+  filter: blur(8px);
+  opacity: 0.4;
+  z-index: -1;
+}
