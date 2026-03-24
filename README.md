@@ -90,6 +90,7 @@ You need to create the following flags in your LaunchDarkly project.
 2. Enter the key `show-chatbot`, select Boolean type
 3. Set variations: `true` / `false`, default `false`
 4. Save and toggle it **on** to see the chatbot
+5. Ensure that Flag has client-side SDK enabled. [Docs](https://launchdarkly.com/docs/home/flags/proj-flag-settings#client-side-availability)
 
 #### `solemate-chatbot` (AI Config)
 
@@ -101,21 +102,22 @@ You need to create the following flags in your LaunchDarkly project.
 | **Description** | Controls the chatbot's system prompt and model. Variations let you swap the chatbot personality live. |
 
 **How to create:**
-1. Go to **Feature Flags** → **Create flag** → select **AI Config** as the type
-2. Set the key to `solemate-chatbot`
-3. Create the three variations below
-4. Save and toggle on
+1. Go to **AI Config** → **Create AI Config** → select **Completion** as the type
+2. Set the name to `solemate-chatbot`
+3. Hit Create.
+4. Create the three variations below
+5. Save and toggle on
 
-##### Variation 1: `default` — "With Recommendations"
+##### Variation 1: Key: `default` —  Name: "With Recommendations"
 
 | Setting | Value |
 |---|---|
 | **Variation key** | `default` |
 | **Variation name** | With Recommendations |
 | **Provider** | Anthropic |
-| **Model** | `claude-sonnet-4-20250514` |
+| **Model** | `claude-sonnet-4-20250514` or any Claude Model |
 
-**System prompt:**
+Add Message -> **System prompt:**
 
 ```
 You are a friendly, knowledgeable shopping assistant for SoleMate, a premium online shoe store. Your tone is warm, confident, and helpful.
@@ -156,9 +158,9 @@ This is the primary variation. The `[RECOMMEND:...]` marker is parsed by the app
 | **Variation key** | `no-recommendations` |
 | **Variation name** | No Recommendations |
 | **Provider** | Anthropic |
-| **Model** | `claude-sonnet-4-20250514` |
+| **Model** | `claude-sonnet-4-20250514` or any Claude Model |
 
-**System prompt:**
+Add Message -> **System prompt:**
 
 ```
 You are a friendly, knowledgeable shoe expert for SoleMate, a premium online shoe store. Your tone is warm, confident, and helpful.
@@ -175,14 +177,14 @@ Guidelines:
 
 This variation turns the chatbot into a general shoe expert that never recommends specific products. Useful for A/B testing whether product recommendations drive more purchases.
 
-##### Variation 3: `linked-in-transformer` — "joke"
+##### Variation 3: Key: `linked-in-transformer` — Name: "joke"
 
 | Setting | Value |
 |---|---|
 | **Variation key** | `linked-in-transformer` |
 | **Variation name** | joke |
 | **Provider** | Anthropic |
-| **Model** | `claude-sonnet-4-5` |
+| **Model** | `claude-sonnet-4-5` or any Claude model |
 
 **System prompt:**
 
@@ -198,8 +200,8 @@ This is a demo/prank variation that makes the chatbot respond with a joke in Spa
 
 The app can automatically turn off a flag variation after the chatbot responds. This is useful for demos where you want to briefly show a "prank" variation, then have it revert.
 
-1. In LaunchDarkly, go to your flag → **Triggers** tab
-2. Create a trigger that turns off the flag (or changes its targeting)
+1. In LaunchDarkly, go to your flag → 3 Dots on environment → Confirugation in environment →  **Triggers** tab → Add trigger
+2. Create a trigger that turns off the flag
 3. Copy the webhook URL and paste it into `LD_TRIGGER_URL` in your `.env`
 4. Restart the dev server
 
@@ -213,7 +215,7 @@ When the chatbot generates a response while the `linked-in-transformer` variatio
 
 Before creating the experiment, you need a metric to measure conversions.
 
-1. In LaunchDarkly, go to **Metrics** → **Create metric**
+1. In LaunchDarkly, go to **Iterate** → **Metrics** → **Create metric**
 2. Fill in the following:
 
 | Setting | Value |
@@ -235,10 +237,12 @@ Before creating the experiment, you need a metric to measure conversions.
 1. Go to **Experiments** → **Create experiment**
 2. Name it something like `Chatbot Purchase Conversion`
 3. Set the **hypothesis:** Users who see the chatbot will purchase more often
-4. Attach the **`show-chatbot`** flag as the experiment flag
-5. Set the rollout to **50/50** between `true` and `false`
-6. Add the **SoleMate Purchases** metric you just created
-7. Start the experiment
+4. Create Experiment
+5. Add the **SoleMate Purchases** metric you just created
+6. Attach the **`show-chatbot`** flag as the experiment flag
+7. Set the rollout to **50/50** between `true` and `false`
+8. Add the **SoleMate Purchases** metric you just created
+9. Save and Start the experiment. You may need to turn the flag on before starting experiment.
 
 **To generate experiment data:**
 1. Run the app locally
@@ -246,6 +250,7 @@ Before creating the experiment, you need a metric to measure conversions.
 3. Click **"Simulate 150 Users"**
 4. The app sends 150 unique user contexts to LaunchDarkly, evaluates `show-chatbot` for each, and fires `SoleMate-Purchases` events accordingly
 5. Return to your experiment in LaunchDarkly to view results — you need a minimum of 100 exposures per variation for statistical significance
+6. It may take up to 10 mins from when events are pushed until data is shown in the platform.
 
 ---
 
@@ -268,6 +273,36 @@ Open your browser to **http://localhost:5173**
 | `solemate-chatbot` | Chatbot widget | AI Config controlling the chatbot's system prompt, model, and personality |
 
 Both flags respond in real time — no page refresh needed. The `solemate-chatbot` AI Config can be swapped between variations live to demonstrate different chatbot behaviors.
+
+---
+
+## Use Cases
+---
+
+1. Release & Remediate
+
+Users can turn features on/off in run time without a page reload. In the demo users can turn flag show-chatbot on/off. For remdiate, if the user uses the joke prompt a trigger will automatically turn the chatbot functionality off. Simulating how users can quickly remediate unintended responses from AI.
+
+2. Target
+
+Users can create custom rules in the flag show-chatbot to target users or groups for specific features. Example could be new rules and regulations in place that require explicit permission to use AI functionality. Users can use LD to target regions without those laws/regulations. 
+
+3. AI Configs
+
+Users can use AI config flag solemate-chatbot to modify and measure prompts in runtime. The different variations show how users can operationalize AI to have an impact on metrics that matter. In this case, we implemented a normal chat bot with the default variation that can be helpful in answering questions about products. The recommendation variation takes this a step further and recommends specific items to users and makes it easier to buy. The Joke variation simulates the non-deterministic nature of flags and how LD can quickly remediate. 
+
+4. Experimentation
+
+Users can use the AI configs flag solemate-chatbot and run an experiment on users in a specific location to understand if the recommend prompt actually increases conversions. Experimentation provides the hard metrics to show how AI can have an impact on business metrics. 
+
+5. Integrations
+
+With the MCP server, users can pick the winning variation from the experiment and remove the feature flags to make it permanent. Making it easy to create/remove feature flags after the use case has been proven. 
+
+6. Platform
+
+LD is the only platform that allows for self-healing and self-optimizing software. 
+
 
 ---
 
