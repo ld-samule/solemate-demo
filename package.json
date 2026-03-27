@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@launchdarkly/node-server-sdk": "^9.10.10",
+    "@launchdarkly/server-sdk-ai": "^0.16.7",
     "launchdarkly-react-client-sdk": "^3.9.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

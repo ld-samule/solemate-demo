@@ -4,28 +4,6 @@ import { useCart } from "../context/CartContext";
 import products from "../data/products";
 import ProductModal from "./ProductModal";
 
-const FALLBACK_SYSTEM_PROMPT = `You are a friendly, knowledgeable shopping assistant for SoleMate, a premium online shoe store. Your tone is warm, confident, and helpful.
-
-Product catalog:
-${products.map((p) => `- ${p.name} (${p.category}) — $${p.price.toFixed(2)}`).join("\n")}
-
-Guidelines:
-- Keep responses concise — 2-3 sentences max
-- When the user asks about shoes, needs, or preferences, recommend exactly 1 shoe from the catalog above
-- Pick a shoe that best matches the user's needs. If no clear match, pick one randomly.
-- We carry US sizes 7-13. Free shipping on orders over $150.
-- Be enthusiastic but not pushy
-- If asked about topics unrelated to shoes or SoleMate, politely redirect
-
-CRITICAL: When you recommend a product, you MUST append this exact marker at the very end of your response on its own line:
-[RECOMMEND:Exact Product Name]
-
-For example if you recommend the Air Phantom X, end your response with:
-[RECOMMEND:Air Phantom X]
-
-Only include the marker when you are actively recommending a product. Use the exact product name from the catalog.`;
-
-const FALLBACK_MODEL = "claude-sonnet-4-20250514";
 const RECOMMEND_REGEX = /\[RECOMMEND:(.+?)\]\s*$/;
 
 function parseRecommendation(text) {
@@ -40,42 +18,6 @@ function parseRecommendation(text) {
   return { displayText, product: product || null };
 }
 
-function useAIConfig() {
-  const ldClient = useLDClient();
-  const [config, setConfig] = useState({
-    systemPrompt: FALLBACK_SYSTEM_PROMPT,
-    model: FALLBACK_MODEL,
-    variationKey: null,
-  });
-
-  useEffect(() => {
-    if (!ldClient) return;
-
-    function updateConfig() {
-      const aiConfig = ldClient.variation("solemate-chatbot", null);
-      console.log("[SoleMate Debug] solemate-chatbot variation:", JSON.stringify(aiConfig, null, 2));
-      if (aiConfig && aiConfig.messages) {
-        const systemMsg = aiConfig.messages.find((m) => m.role === "system");
-        const prompt = systemMsg?.content || FALLBACK_SYSTEM_PROMPT;
-        console.log("[SoleMate Debug] Active system prompt:", prompt.substring(0, 120) + "...");
-        const modelKey = aiConfig.model?.name || aiConfig.modelConfigKey || "";
-        const model = modelKey.includes(".") ? modelKey.split(".").slice(1).join(".") : (modelKey || FALLBACK_MODEL);
-        const variationKey = aiConfig._ldMeta?.variationKey || null;
-        console.log("[SoleMate Debug] Variation key:", variationKey);
-        setConfig({ systemPrompt: prompt, model, variationKey });
-      } else {
-        console.warn("[SoleMate Debug] No AI config from LD — using FALLBACK prompt (which includes recommendations)");
-      }
-    }
-
-    updateConfig();
-    ldClient.on("change", updateConfig);
-    return () => ldClient.off("change", updateConfig);
-  }, [ldClient]);
-
-  return config;
-}
-
 export default function Chatbot() {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState([
@@ -86,8 +28,7 @@ export default function Chatbot() {
   const [recommendedProduct, setRecommendedProduct] = useState(null);
   const [modalProduct, setModalProduct] = useState(null);
   const messagesEndRef = useRef(null);
-  const triggerFiredRef = useRef(false);
-  const { systemPrompt, model, variationKey } = useAIConfig();
+  const ldClient = useLDClient();
   const { isOpen: cartIsOpen } = useCart();
 
   useEffect(() => {
@@ -123,14 +64,14 @@ export default function Chatbot() {
         content: m.content,
       }));
 
+      const currentContext = ldClient?.getContext();
+
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model,
-          max_tokens: 300,
-          system: systemPrompt,
           messages: apiMessages,
+          userKey: currentContext?.key || "solemate-anonymous",
         }),
       });
 
@@ -139,21 +80,11 @@ export default function Chatbot() {
       }
 
       const data = await res.json();
-      const rawReply = data.content?.[0]?.text || "Sorry, I couldn't process that. Please try again.";
+      const rawReply = data.reply || "Sorry, I couldn't process that. Please try again.";
       const { displayText, product } = parseRecommendation(rawReply);
 
       setMessages((prev) => [...prev, { role: "assistant", content: displayText }]);
       setRecommendedProduct(product);
-
-      if (variationKey === "linked-in-transformer" && !triggerFiredRef.current) {
-        triggerFiredRef.current = true;
-        console.log("[SoleMate Debug] Joke variation detected — firing LD trigger in 5s");
-        setTimeout(() => {
-          fetch("/api/trigger", { method: "POST" })
-            .then((r) => console.log("[SoleMate Debug] LD trigger response:", r.status))
-            .catch((err) => console.error("[SoleMate Debug] LD trigger failed:", err));
-        }, 5000);
-      }
     } catch {
       setMessages((prev) => [
         ...prev,

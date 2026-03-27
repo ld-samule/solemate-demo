@@ -1,17 +1,19 @@
 # SoleMate
 
 A premium shoe store built with React + Vite, demonstrating feature flags,
-AI-powered experiences, and experimentation using the LaunchDarkly React SDK.
+AI-powered experiences, and experimentation using the LaunchDarkly
+[React SDK](https://docs.launchdarkly.com/sdk/client-side/react/react-web) and
+[Node.js AI SDK](https://docs.launchdarkly.com/sdk/ai/node-js).
 
 ---
 
 ## What This App Demonstrates
 
 - A fully functional shoe store with product listing, product detail modals, shopping cart, and checkout
-- A **feature flag** controlling the visibility of an AI chatbot widget
-- An **AI Config flag** (`solemate-chatbot`) that manages the chatbot's system prompt and model — swappable live without redeploying
-- A **flag trigger** that automatically turns off a flag variation after the AI responds
-- A **conversion experiment** measuring whether the chatbot drives more purchases
+- A **[feature flag](https://docs.launchdarkly.com/home/flags)** controlling the visibility of an AI chatbot widget
+- An **[AI Config](https://docs.launchdarkly.com/home/ai-configs)** (`solemate-chatbot`) that manages the chatbot's system prompt and model — evaluated server-side using the official [Node.js AI SDK](https://docs.launchdarkly.com/sdk/ai/node-js) with full **[metric tracking](https://docs.launchdarkly.com/sdk/features/ai-metrics)** (tokens, latency, success/error)
+- A **[flag trigger](https://docs.launchdarkly.com/home/flags/triggers)** that automatically turns off a flag variation after the AI responds
+- A **[conversion experiment](https://docs.launchdarkly.com/home/experimentation)** measuring whether the chatbot drives more purchases
 - A **150-user context simulator** built into the UI to generate experiment data at scale
 
 ---
@@ -56,6 +58,7 @@ Paste the following into `.env` and replace each placeholder with your real valu
 ```
 VITE_LAUNCHDARKLY_CLIENT_ID=your-client-side-id-here
 ANTHROPIC_API_KEY=your-anthropic-api-key-here
+LD_SERVER_SDK_KEY=your-server-side-sdk-key-here
 LD_TRIGGER_URL=your-launchdarkly-trigger-url-here
 ```
 
@@ -63,10 +66,11 @@ LD_TRIGGER_URL=your-launchdarkly-trigger-url-here
 |---|---|
 | `VITE_LAUNCHDARKLY_CLIENT_ID` | LaunchDarkly → **Projects** → your project → **Environments** → copy the **Client-side ID** (not the SDK key) |
 | `ANTHROPIC_API_KEY` | Anthropic Console → **API Keys** → create or copy a key |
+| `LD_SERVER_SDK_KEY` | LaunchDarkly → **Projects** → your project → **Environments** → copy the **SDK key** (the server-side one, not the Client-side ID) |
 | `LD_TRIGGER_URL` | LaunchDarkly → **Feature Flags** → your flag → 3 dots on environment → configuration in environment → **Triggers** tab → Add Trigger → copy the webhook URL (single-use; replace after each firing) |
 
-> **Note:** `ANTHROPIC_API_KEY` and `LD_TRIGGER_URL` are server-side only (no `VITE_` prefix).
-> They are used by the Vite dev server proxy and never sent to the browser.
+> **Note:** `ANTHROPIC_API_KEY`, `LD_SERVER_SDK_KEY`, and `LD_TRIGGER_URL` are server-side only (no `VITE_` prefix).
+> They are used by the Vite dev server backend and never sent to the browser.
 
 ---
 
@@ -90,7 +94,7 @@ You need to create the following flags in your LaunchDarkly project.
 2. Enter the key `show-chatbot`, select Boolean type
 3. Set variations: `true` / `false`, default `false`
 4. Save and toggle it **on** to see the chatbot
-5. Ensure that Flag has client-side SDK enabled. [Docs](https://launchdarkly.com/docs/home/flags/proj-flag-settings#client-side-availability)
+5. Ensure the flag has **client-side SDK availability** enabled. [Docs](https://docs.launchdarkly.com/home/flags/proj-flag-settings#client-side-availability)
 
 #### `solemate-chatbot` (AI Config)
 
@@ -101,11 +105,11 @@ You need to create the following flags in your LaunchDarkly project.
 | **Mode** | Completion |
 | **Description** | Controls the chatbot's system prompt and model. Variations let you swap the chatbot personality live. |
 
-**How to create:**
-1. Go to **AI Config** → **Create AI Config** → select **Completion** as the type
+**How to create** ([AI Config docs](https://docs.launchdarkly.com/home/ai-configs/create)):
+1. Go to **AI Config** → **Create AI Config** → select **Completion** as the mode
 2. Set the name to `solemate-chatbot`
-3. Hit Create.
-4. Create the three variations below
+3. Hit Create
+4. Create the three [variations](https://docs.launchdarkly.com/home/ai-configs/create-variation) below
 5. Save and toggle on
 
 ##### Variation 1: Key: `default` —  Name: "With Recommendations"
@@ -267,12 +271,12 @@ Open your browser to **http://localhost:5173**
 
 ## Feature Flag Reference
 
-| Flag | Where it appears | What it does |
-|---|---|---|
-| `show-chatbot` | Bottom-right corner, all pages | Toggles the SoleMate Assistant chat widget |
-| `solemate-chatbot` | Chatbot widget | AI Config controlling the chatbot's system prompt, model, and personality |
+| Flag | Type | Evaluated where | What it does |
+|---|---|---|---|
+| `show-chatbot` | Boolean | Client ([React SDK](https://docs.launchdarkly.com/sdk/client-side/react/react-web)) | Toggles the SoleMate Assistant chat widget |
+| `solemate-chatbot` | [AI Config](https://docs.launchdarkly.com/home/ai-configs) | Server ([Node.js AI SDK](https://docs.launchdarkly.com/sdk/ai/node-js)) | Controls the chatbot's system prompt, model, and personality — with metric tracking |
 
-Both flags respond in real time — no page refresh needed. The `solemate-chatbot` AI Config can be swapped between variations live to demonstrate different chatbot behaviors.
+`show-chatbot` responds in real time on the client via the React SDK's streaming connection. `solemate-chatbot` is evaluated fresh on the server with every chat request via `completionConfig()`, so switching variations in LaunchDarkly takes effect on the next message sent.
 
 ---
 
@@ -305,17 +309,58 @@ LD is the only platform that allows for self-healing and self-optimizing softwar
 
 
 ---
+## AI Config Supported implementation vs MCP solution
 
+AI Config flags under the hood are regular LaunchDarkly flags with sctructed JSON values. So ldClient.variation("solemate-chatbot", null) — the same call you'd use for any feature flag — returns the raw JSON for whichever variation is active.
+
+When I used cursor and the LD MCP to implement AI configs it used the under the hood feature flag to make the AI functionality work. 
+
+The App was essentially treating the AI Config as a structured JSON flag and parsing it by hand.
+
+What you lose vs. the official server-side AI SDK
+No completionConfig() helper — the official SDK handles evaluation, context substitution (the {{ ldctx.name }} template syntax), and fallback logic in one call.
+
+No built-in AI tracking — the server-side AI SDK includes a tracker that records token usage, latency, and generation metrics back to LD
+
+No prompt templating — if your prompt uses {{ ldctx.city }} or {{ customVar }}, the client SDK won't substitute those; you'd have to do it yourself.
+
+The previous implementation works but recreates the AI config functionlality using the Feature flag underneath but doesnt incorporate the specialized features that are built in using the AI SDK for AI configs. 
+
+
+---
 ## Architecture
 
-### Vite Dev Server Proxies
+### Server-Side AI Config Evaluation
 
-The chatbot and trigger features rely on two server-side proxies defined in `vite.config.js`. This keeps API keys off the client.
+The chatbot uses the [LaunchDarkly Node.js AI SDK](https://docs.launchdarkly.com/sdk/ai/node-js) on the server side, following the official best-practice pattern. This runs inside Vite's dev server middleware (`vite.config.js`).
 
-| Endpoint | Proxies to | Purpose |
-|---|---|---|
-| `POST /api/chat` | `https://api.anthropic.com/v1/messages` | Forwards chat messages to Claude, injecting the `ANTHROPIC_API_KEY` |
-| `POST /api/trigger` | The `LD_TRIGGER_URL` value | Fires the LaunchDarkly flag trigger webhook |
+**How a chat request flows:**
+
+1. The React frontend sends `{ messages, userKey }` to `POST /api/chat`
+2. The server builds an [LD context](https://docs.launchdarkly.com/home/getting-started/vocabulary#context) from the user key
+3. [`completionConfig()`](https://docs.launchdarkly.com/sdk/features/ai-config#nodejs-server-side-ai) evaluates the `solemate-chatbot` AI Config for that context, returning the system prompt, model, and a [tracker](https://docs.launchdarkly.com/sdk/features/ai-metrics#nodejs-server-side-ai)
+4. If the config is disabled, a graceful fallback message is returned
+5. The server calls the Anthropic API with the prompt and model from the AI Config
+6. The tracker records token usage, latency, and success/error back to LaunchDarkly
+7. If the active variation is `linked-in-transformer`, the server fires the [flag trigger](https://docs.launchdarkly.com/home/flags/triggers) after 5 seconds
+8. The reply text is returned to the frontend
+
+The frontend has **no knowledge** of prompts, models, or AI Config variations — it just sends messages and displays replies.
+
+### API Endpoints
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/chat` | Evaluates the AI Config, calls Claude, tracks metrics, returns `{ reply }` |
+| `POST /api/trigger` | Fires the `LD_TRIGGER_URL` webhook (also triggered automatically by `/api/chat` for the joke variation) |
+
+### SDK Usage
+
+| SDK | Used where | Purpose | Docs |
+|---|---|---|---|
+| `launchdarkly-react-client-sdk` | React frontend (`main.jsx`, `App.jsx`, `SettingsPanel.jsx`) | Feature flags, context management, experiment events | [React SDK](https://docs.launchdarkly.com/sdk/client-side/react/react-web) |
+| `@launchdarkly/node-server-sdk` | Vite server middleware (`vite.config.js`) | Server-side flag evaluation for AI Configs | [Node.js SDK](https://docs.launchdarkly.com/sdk/server-side/node-js) |
+| `@launchdarkly/server-sdk-ai` | Vite server middleware (`vite.config.js`) | `completionConfig()` + metric tracking | [Node.js AI SDK](https://docs.launchdarkly.com/sdk/ai/node-js) |
 
 ---
 
@@ -328,7 +373,7 @@ src/
     ProductCard.jsx       # Individual product card used in the listing grid
     ProductModal.jsx      # Full-screen product detail overlay with size selector and add-to-cart
     Cart.jsx              # Slide-out cart drawer with checkout
-    Chatbot.jsx           # AI chatbot widget — uses solemate-chatbot AI Config and /api/chat proxy
+    Chatbot.jsx           # AI chatbot widget — sends messages to /api/chat, displays replies
     SettingsPanel.jsx     # LD Context editor and 150-user experiment simulator
   pages/
     Home.jsx              # Product listing page with hero banner
@@ -340,7 +385,7 @@ src/
   App.jsx                  # Root component with flag-gated chatbot
   main.jsx                 # Vite entry point, initializes LaunchDarkly provider
   index.css                # Global styles and Tailwind imports
-vite.config.js             # Vite config with Anthropic and LD trigger proxies
+vite.config.js             # Vite config + server backend (LD AI SDK, Anthropic proxy, trigger)
 ```
 
 ---
@@ -354,11 +399,17 @@ vite.config.js             # Vite config with Anthropic and LD trigger proxies
 
 **Chatbot doesn't respond**
 - Check that `ANTHROPIC_API_KEY` is set in `.env` and is a valid key
+- Check that `LD_SERVER_SDK_KEY` is set — without it the server falls back to a minimal config. Look for `[LD Server] AI SDK initialized` in the terminal where Vite is running
 - Open the browser console and look for errors on the `/api/chat` request
 - Make sure `show-chatbot` is toggled **on** so the widget appears
 
+**AI Config variation isn't taking effect**
+- The AI Config is evaluated server-side on each request — check the Vite terminal for `[LD Server]` logs
+- Make sure `LD_SERVER_SDK_KEY` is the **server-side SDK key** (not the Client-side ID)
+- Confirm the `solemate-chatbot` AI Config is toggled **on** in your LaunchDarkly environment
+
 **LD trigger doesn't fire**
-- Check the browser console for `[SoleMate Debug] Joke variation detected` — if you don't see it, the variation key may not match `linked-in-transformer`
+- Check the Vite terminal for `[LD Trigger] linked-in-transformer detected` — if you don't see it, the variation key may not match
 - Make sure `LD_TRIGGER_URL` is set in `.env` and the dev server has been restarted since setting it
 - Trigger URLs are single-use; generate a new one in LaunchDarkly after each firing
 
@@ -371,6 +422,8 @@ vite.config.js             # Vite config with Anthropic and LD trigger proxies
 
 - [React](https://react.dev/) + [Vite](https://vitejs.dev/)
 - [Tailwind CSS](https://tailwindcss.com/)
-- [LaunchDarkly React SDK](https://docs.launchdarkly.com/sdk/client-side/react/react-web)
 - [React Router](https://reactrouter.com/)
-- [Anthropic Claude API](https://docs.anthropic.com/en/docs/about-claude/models)
+- [LaunchDarkly React SDK](https://docs.launchdarkly.com/sdk/client-side/react/react-web) — client-side feature flags and context management
+- [LaunchDarkly Node.js Server SDK](https://docs.launchdarkly.com/sdk/server-side/node-js) — server-side flag evaluation
+- [LaunchDarkly Node.js AI SDK](https://docs.launchdarkly.com/sdk/ai/node-js) — AI Config evaluation and metric tracking
+- [Anthropic Claude API](https://docs.anthropic.com/en/docs/about-claude/models) — powers the chatbot
