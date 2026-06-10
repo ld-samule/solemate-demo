@@ -23,7 +23,7 @@ const FALLBACK_CONFIG = {
 function solemateBackend() {
   let anthropicApiKey = ''
   let triggerUrl = ''
-  let aiClientPromise = null
+  let ldClientsPromise = null
   let triggerFired = false
 
   return {
@@ -35,12 +35,12 @@ function solemateBackend() {
       const sdkKey = env.LD_SERVER_SDK_KEY || ''
 
       if (sdkKey) {
-        aiClientPromise = (async () => {
+        ldClientsPromise = (async () => {
           try {
             const ldClient = init(sdkKey)
             await ldClient.waitForInitialization({ timeout: 10 })
             console.log('[LD Server] AI SDK initialized')
-            return initAi(ldClient)
+            return { ldClient, aiClient: initAi(ldClient) }
           } catch (err) {
             console.error('[LD Server] Failed to initialize:', err.message)
             return null
@@ -65,17 +65,21 @@ function solemateBackend() {
         const context = { kind: 'user', key: userKey }
 
         let config = { ...FALLBACK_CONFIG, tracker: null }
+        let variationKey = null
 
-        if (aiClientPromise) {
-          const aiClient = await aiClientPromise
-          if (aiClient) {
+        if (ldClientsPromise) {
+          const clients = await ldClientsPromise
+          if (clients) {
             try {
-              config = await aiClient.completionConfig(
+              config = await clients.aiClient.completionConfig(
                 'solemate-chatbot',
                 context,
                 FALLBACK_CONFIG,
                 {},
               )
+              const rawValue = await clients.ldClient.variation('solemate-chatbot', context, null)
+              variationKey = rawValue?._ldMeta?.variationKey || null
+              console.log('[LD Server] Variation key:', variationKey)
             } catch (err) {
               console.error('[LD Server] completionConfig failed:', err.message)
             }
@@ -138,7 +142,6 @@ function solemateBackend() {
 
           const reply = data.content?.[0]?.text || "Sorry, I couldn't process that."
 
-          const variationKey = config._ldMeta?.variationKey
           if (variationKey === 'linked-in-transformer' && triggerUrl && !triggerFired) {
             triggerFired = true
             console.log('[LD Trigger] linked-in-transformer detected — firing in 5s')

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLDClient } from "launchdarkly-react-client-sdk";
+import products from "../data/products";
 
 const REGIONS = [
   "us-east-1",
@@ -102,11 +103,17 @@ export default function SettingsPanel({ isOpen, onClose }) {
 
       const flagValue = ldClient.variation("show-chatbot", false);
 
+      const randomPurchaseValue = () => {
+        const product = products[Math.floor(Math.random() * products.length)];
+        const qty = Math.random() < 0.7 ? 1 : 2;
+        return +(product.price * qty).toFixed(2);
+      };
+
       if (flagValue === true) {
-        ldClient.track("SoleMate-Purchases");
+        ldClient.track("SoleMate-Purchases", undefined, randomPurchaseValue());
       } else {
         if (Math.random() < 0.5) {
-          ldClient.track("SoleMate-Purchases");
+          ldClient.track("SoleMate-Purchases", undefined, randomPurchaseValue());
         }
       }
 
