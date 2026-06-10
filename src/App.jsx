@@ -18,7 +18,7 @@ export default function App() {
       <CartProvider>
         {showUpperBanner && (
           <div className="w-full py-2 px-6 text-center text-sm font-semibold tracking-wide bg-red-600 text-white">
-            benner to be deleted
+            Will remove this banner as part of Vega
           </div>
         )}
         <Banner />
