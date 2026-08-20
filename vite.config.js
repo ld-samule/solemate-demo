@@ -1,30 +1,26 @@
+import crypto from 'node:crypto'
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { init } from '@launchdarkly/node-server-sdk'
 import { initAi } from '@launchdarkly/server-sdk-ai'
-
-const MAX_TURNS = 20
-
-const FALLBACK_CONFIG = {
-  enabled: true,
-  model: { name: 'claude-sonnet-4-20250514', parameters: { max_tokens: 300 } },
-  messages: [
-    {
-      role: 'system',
-      content:
-        'You are a friendly, knowledgeable shopping assistant for SoleMate, a premium online shoe store. ' +
-        'Keep responses concise — 2-3 sentences max. Be enthusiastic but not pushy. ' +
-        'If asked about topics unrelated to shoes or SoleMate, politely redirect.',
-    },
-  ],
-}
+import { handleChat, executeImplementer } from './server/pipeline.js'
 
 function solemateBackend() {
   let anthropicApiKey = ''
   let triggerUrl = ''
   let ldClientsPromise = null
-  let triggerFired = false
+  const triggerState = { fired: false }
+  const reasoningStreams = new Map()
+  const pendingApprovals = new Map()
+
+  function emitReasoning(reasoningId, event) {
+    const sseRes = reasoningStreams.get(reasoningId)
+    if (!sseRes) return
+    try {
+      sseRes.write(`data: ${JSON.stringify(event)}\n\n`)
+    } catch { /* client disconnected */ }
+  }
 
   return {
     name: 'solemate-backend',
@@ -51,6 +47,40 @@ function solemateBackend() {
       }
     },
     configureServer(server) {
+      // --- SSE reasoning stream with heartbeat ---
+      server.middlewares.use((req, res, next) => {
+        const url = new URL(req.url, 'http://localhost')
+        if (!url.pathname.startsWith('/api/reasoning')) return next()
+        if (req.method !== 'GET') {
+          res.writeHead(405)
+          res.end('Method not allowed')
+          return
+        }
+        const id = url.searchParams.get('id')
+        if (!id) {
+          res.writeHead(400)
+          res.end('Missing id parameter')
+          return
+        }
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        })
+        res.write('\n')
+        reasoningStreams.set(id, res)
+
+        const heartbeat = setInterval(() => {
+          try { res.write(':heartbeat\n\n') } catch { clearInterval(heartbeat) }
+        }, 15000)
+
+        req.on('close', () => {
+          clearInterval(heartbeat)
+          reasoningStreams.delete(id)
+        })
+      })
+
+      // --- Chat handler: delegates to pipeline ---
       server.middlewares.use('/api/chat', async (req, res) => {
         if (req.method !== 'POST') {
           res.writeHead(405)
@@ -61,109 +91,112 @@ function solemateBackend() {
         const chunks = []
         for await (const chunk of req) chunks.push(chunk)
         const body = JSON.parse(Buffer.concat(chunks).toString())
-        const { messages = [], userKey = 'solemate-anonymous' } = body
-        const context = { kind: 'user', key: userKey }
+        const { messages = [], userKey = 'solemate-anonymous', reasoningId: clientReasoningId } = body
+        const reasoningId = clientReasoningId || crypto.randomUUID()
 
-        let config = { ...FALLBACK_CONFIG, tracker: null }
-        let variationKey = null
+        await new Promise((r) => setTimeout(r, 50))
 
-        if (ldClientsPromise) {
-          const clients = await ldClientsPromise
-          if (clients) {
-            try {
-              config = await clients.aiClient.completionConfig(
-                'solemate-chatbot',
-                context,
-                FALLBACK_CONFIG,
-                {},
-              )
-              const rawValue = await clients.ldClient.variation('solemate-chatbot', context, null)
-              variationKey = rawValue?._ldMeta?.variationKey || null
-              console.log('[LD Server] Variation key:', variationKey)
-            } catch (err) {
-              console.error('[LD Server] completionConfig failed:', err.message)
-            }
-          }
+        const clients = ldClientsPromise ? await ldClientsPromise : null
+
+        if (!clients) {
+          console.warn('[LD Server] LD client unavailable — running with fallback configs')
         }
-
-        if (!config.enabled) {
-          res.writeHead(200, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({ reply: 'The SoleMate assistant is temporarily unavailable.' }))
-          return
-        }
-
-        const systemPrompt =
-          config.messages?.find((m) => m.role === 'system')?.content ||
-          FALLBACK_CONFIG.messages[0].content
-        const modelName = config.model?.name || FALLBACK_CONFIG.model.name
-        const maxTokens =
-          config.model?.parameters?.max_tokens ||
-          config.model?.parameters?.maxTokens ||
-          300
-        const trimmedMessages = messages.slice(-MAX_TURNS)
-        const { tracker } = config
-
-        const start = Date.now()
 
         try {
-          const response = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-api-key': anthropicApiKey,
-              'anthropic-version': '2023-06-01',
-            },
-            body: JSON.stringify({
-              model: modelName,
-              max_tokens: maxTokens,
-              system: systemPrompt,
-              messages: trimmedMessages,
-            }),
+          const result = await handleChat({
+            aiClient: clients?.aiClient || null,
+            ldClient: clients?.ldClient || null,
+            anthropicApiKey,
+            messages,
+            userKey,
+            reasoningId,
+            emitReasoning,
+            pendingApprovals,
+            triggerUrl,
+            triggerState,
           })
 
-          const data = await response.json()
-
-          if (!response.ok) {
-            tracker?.trackError()
-            res.writeHead(response.status, { 'Content-Type': 'application/json' })
-            res.end(JSON.stringify({ error: data.error?.message || 'Claude API error' }))
-            return
-          }
-
-          tracker?.trackSuccess()
-          tracker?.trackDuration(Date.now() - start)
-          if (data.usage) {
-            tracker?.trackTokens({
-              input: data.usage.input_tokens,
-              output: data.usage.output_tokens,
-              total: data.usage.input_tokens + data.usage.output_tokens,
-            })
-          }
-
-          const reply = data.content?.[0]?.text || "Sorry, I couldn't process that."
-
-          if (variationKey === 'linked-in-transformer' && triggerUrl && !triggerFired) {
-            triggerFired = true
-            console.log('[LD Trigger] linked-in-transformer detected — firing in 5s')
-            setTimeout(async () => {
-              try {
-                const triggerRes = await fetch(triggerUrl, { method: 'POST' })
-                console.log(`[LD Trigger] Fired → ${triggerRes.status}`)
-              } catch (err) {
-                console.error('[LD Trigger] Error:', err.message)
-              }
-            }, 5000)
-          }
-
-          res.writeHead(200, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({ reply }))
+          const statusCode = result.error ? 500 : 200
+          res.writeHead(statusCode, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify(result))
         } catch (err) {
-          tracker?.trackError()
+          console.error('[LD Server] Unhandled chat error:', err)
+          emitReasoning(reasoningId, {
+            node: 'pipeline', status: 'warn',
+            timestamp: Date.now(), detail: err.message,
+          })
           res.writeHead(500, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({ error: err.message }))
+          res.end(JSON.stringify({ error: err.message, reasoningId }))
         }
       })
 
+      // --- HITL approval: runs remaining pipeline after approval ---
+      server.middlewares.use('/api/approve', async (req, res) => {
+        if (req.method !== 'POST') {
+          res.writeHead(405)
+          res.end('Method not allowed')
+          return
+        }
+
+        const chunks = []
+        for await (const chunk of req) chunks.push(chunk)
+        const body = JSON.parse(Buffer.concat(chunks).toString())
+        const { reasoningId, approved } = body
+
+        const pending = pendingApprovals.get(reasoningId)
+        if (!pending) {
+          res.writeHead(404, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: 'No pending approval found for this reasoningId' }))
+          return
+        }
+
+        pendingApprovals.delete(reasoningId)
+        const clients = ldClientsPromise ? await ldClientsPromise : null
+
+        if (approved) {
+          emitReasoning(reasoningId, {
+            node: 'solemate-reviewer', status: 'success',
+            timestamp: Date.now(), detail: 'Human approved',
+          })
+
+          if (clients) {
+            try {
+              const context = { kind: 'user', key: 'solemate-anonymous' }
+              const result = await executeImplementer({
+                aiClient: clients.aiClient,
+                ldClient: clients.ldClient,
+                anthropicApiKey,
+                context,
+                plan: pending.plan,
+                reviewerText: pending.orderSummary,
+                reasoningId,
+                emitReasoning,
+                isAutonomous: false,
+              })
+              res.writeHead(200, { 'Content-Type': 'application/json' })
+              res.end(JSON.stringify({ confirmed: true, reply: result.reply }))
+            } catch (err) {
+              console.error('[LD Server] Post-approval error:', err)
+              const orderId = 'SM-' + crypto.randomUUID().slice(0, 8).toUpperCase()
+              res.writeHead(200, { 'Content-Type': 'application/json' })
+              res.end(JSON.stringify({ confirmed: true, orderId }))
+            }
+          } else {
+            const orderId = 'SM-' + crypto.randomUUID().slice(0, 8).toUpperCase()
+            res.writeHead(200, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ confirmed: true, orderId }))
+          }
+        } else {
+          emitReasoning(reasoningId, {
+            node: 'solemate-reviewer', status: 'blocked',
+            timestamp: Date.now(), detail: 'Human declined',
+          })
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ confirmed: false }))
+        }
+      })
+
+      // --- Manual trigger (unchanged) ---
       server.middlewares.use('/api/trigger', async (req, res) => {
         if (req.method !== 'POST') {
           res.writeHead(405)

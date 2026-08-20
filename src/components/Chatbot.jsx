@@ -3,10 +3,23 @@ import { useLDClient } from "launchdarkly-react-client-sdk";
 import { useCart } from "../context/CartContext";
 import products from "../data/products";
 import ProductModal from "./ProductModal";
+import useReasoningStream from "../hooks/useReasoningStream";
+import ReasoningPanel from "./ReasoningPanel";
 
 const RECOMMEND_REGEX = /\[RECOMMEND:(.+?)\]\s*$/;
+const ORDER_PLACED_REGEX = /\[ORDER_PLACED:(.+?)\]\s*$/;
 
 function parseRecommendation(text) {
+  const orderMatch = text.match(ORDER_PLACED_REGEX);
+  if (orderMatch) {
+    const [productName] = orderMatch[1].split("|");
+    const product = products.find(
+      (p) => p.name.toLowerCase() === productName.trim().toLowerCase()
+    );
+    const displayText = text.replace(ORDER_PLACED_REGEX, "").trim();
+    return { displayText, product: product || null, orderPlaced: true };
+  }
+
   const match = text.match(RECOMMEND_REGEX);
   if (!match) return { displayText: text, product: null };
 
@@ -27,9 +40,13 @@ export default function Chatbot() {
   const [loading, setLoading] = useState(false);
   const [recommendedProduct, setRecommendedProduct] = useState(null);
   const [modalProduct, setModalProduct] = useState(null);
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [reasoningId, setReasoningId] = useState(null);
+  const [pendingApproval, setPendingApproval] = useState(null);
   const messagesEndRef = useRef(null);
   const ldClient = useLDClient();
   const { isOpen: cartIsOpen } = useCart();
+  const { events: reasoningEvents } = useReasoningStream(reasoningId);
 
   useEffect(() => {
     if (cartIsOpen) setIsOpen(false);
@@ -58,6 +75,9 @@ export default function Chatbot() {
     setLoading(true);
     setRecommendedProduct(null);
 
+    const newReasoningId = crypto.randomUUID();
+    setReasoningId(newReasoningId);
+
     try {
       const apiMessages = updatedMessages.map((m) => ({
         role: m.role,
@@ -72,6 +92,7 @@ export default function Chatbot() {
         body: JSON.stringify({
           messages: apiMessages,
           userKey: currentContext?.key || "solemate-anonymous",
+          reasoningId: newReasoningId,
         }),
       });
 
@@ -80,11 +101,26 @@ export default function Chatbot() {
       }
 
       const data = await res.json();
-      const rawReply = data.reply || "Sorry, I couldn't process that. Please try again.";
-      const { displayText, product } = parseRecommendation(rawReply);
 
-      setMessages((prev) => [...prev, { role: "assistant", content: displayText }]);
-      setRecommendedProduct(product);
+      const rawReply = data.reply || "Sorry, I couldn't process that. Please try again.";
+
+      if (data.escalated && data.blockedReply) {
+        const { displayText: blockedText } = parseRecommendation(data.blockedReply);
+        const { displayText, product } = parseRecommendation(rawReply);
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: blockedText, blocked: true },
+          { role: "assistant", content: displayText },
+        ]);
+        setRecommendedProduct(product);
+      } else if (data.pendingApproval) {
+        setMessages((prev) => [...prev, { role: "assistant", content: rawReply }]);
+        setPendingApproval({ ...data.pendingApproval, reasoningId: data.reasoningId });
+      } else {
+        const { displayText, product } = parseRecommendation(rawReply);
+        setMessages((prev) => [...prev, { role: "assistant", content: displayText }]);
+        setRecommendedProduct(product);
+      }
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -93,6 +129,45 @@ export default function Chatbot() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleApprove() {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reasoningId: pendingApproval.reasoningId, approved: true }),
+      });
+      const data = await res.json();
+      if (data.confirmed) {
+        const replyText = data.reply || `Order ${data.orderId || ""} placed!`;
+        const { displayText, product } = parseRecommendation(replyText);
+        setMessages((prev) => [...prev, { role: "assistant", content: displayText }]);
+        setRecommendedProduct(product);
+      }
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "Something went wrong placing the order. Please try again." },
+      ]);
+    } finally {
+      setPendingApproval(null);
+      setLoading(false);
+    }
+  }
+
+  async function handleDecline() {
+    await fetch("/api/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reasoningId: pendingApproval.reasoningId, approved: false }),
+    });
+    setMessages((prev) => [
+      ...prev,
+      { role: "assistant", content: "No problem, I've cancelled that for you." },
+    ]);
+    setPendingApproval(null);
   }
 
   function handleKeyDown(e) {
@@ -112,6 +187,13 @@ export default function Chatbot() {
         />
       )}
 
+      {/* Reasoning Panel */}
+      <ReasoningPanel
+        events={reasoningEvents}
+        isOpen={isPanelOpen && isOpen}
+        onClose={() => setIsPanelOpen(false)}
+      />
+
       {/* Chat Window */}
       {isOpen && (
         <div className="fixed bottom-24 right-6 z-50 w-96 bg-white border border-neutral-200 shadow-2xl flex flex-col overflow-hidden"
@@ -125,22 +207,32 @@ export default function Chatbot() {
               </h3>
               <p className="text-neutral-400 text-xs mt-0.5">Powered by Claude</p>
             </div>
-            <button
-              onClick={() => setIsOpen(false)}
-              className="text-neutral-400 hover:text-white transition-colors"
-              aria-label="Close chat"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth={2}
-                stroke="currentColor"
-                className="w-5 h-5"
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setIsPanelOpen((p) => !p)}
+                className={`text-xs uppercase tracking-wider transition-colors ${
+                  isPanelOpen ? "text-white" : "text-neutral-400 hover:text-white"
+                }`}
               >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-              </svg>
-            </button>
+                Reasoning
+              </button>
+              <button
+                onClick={() => setIsOpen(false)}
+                className="text-neutral-400 hover:text-white transition-colors"
+                aria-label="Close chat"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  strokeWidth={2}
+                  stroke="currentColor"
+                  className="w-5 h-5"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
           </div>
 
           {/* Messages */}
@@ -148,21 +240,98 @@ export default function Chatbot() {
             {messages.map((msg, i) => (
               <div key={i} className={`flex gap-2.5 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
                 {msg.role === "assistant" && (
-                  <div className="w-7 h-7 bg-sole-red flex items-center justify-center shrink-0">
+                  <div className={`w-7 h-7 flex items-center justify-center shrink-0 ${msg.blocked ? "bg-red-400" : "bg-sole-red"}`}>
                     <span className="text-white text-[10px] font-bold">SM</span>
                   </div>
                 )}
-                <div
-                  className={`px-3.5 py-2.5 text-sm leading-relaxed max-w-[85%] ${
-                    msg.role === "user"
-                      ? "bg-black text-white"
-                      : "bg-neutral-100 text-black"
-                  }`}
-                >
-                  {msg.content}
+                <div>
+                  {msg.blocked && (
+                    <div className="px-3 py-1 text-[10px] font-semibold uppercase text-red-500">
+                      Blocked by scope guardrail
+                    </div>
+                  )}
+                  <div
+                    className={`px-3.5 py-2.5 text-sm leading-relaxed max-w-[85%] ${
+                      msg.blocked
+                        ? "bg-red-50 text-neutral-400 line-through"
+                        : msg.role === "user"
+                          ? "bg-black text-white"
+                          : "bg-neutral-100 text-black"
+                    }`}
+                  >
+                    {msg.content}
+                  </div>
                 </div>
               </div>
             ))}
+
+            {/* Approval Card */}
+            {pendingApproval && !loading && (
+              <div className="mx-0 border-2 border-amber-400 bg-amber-50 p-3 text-sm space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                  <p className="font-bold text-xs uppercase tracking-wider text-amber-600">
+                    Awaiting Your Approval
+                  </p>
+                </div>
+                {pendingApproval.facts && (
+                  <div className="bg-white border border-amber-200 p-2 space-y-1 text-xs">
+                    {pendingApproval.facts.stock && (
+                      <div className="flex justify-between">
+                        <span className="text-neutral-500">Stock</span>
+                        <span className={pendingApproval.facts.stock.status === 'ok' ? 'text-green-600' : 'text-red-500'}>
+                          {pendingApproval.facts.stock.status === 'ok' ? 'Available' : 'Unavailable'}
+                        </span>
+                      </div>
+                    )}
+                    {pendingApproval.facts.payment && (
+                      <div className="flex justify-between">
+                        <span className="text-neutral-500">Payment</span>
+                        <span className={pendingApproval.facts.payment.status === 'ok' ? 'text-green-600' : 'text-red-500'}>
+                          {pendingApproval.facts.payment.status === 'ok' ? 'Verified' : 'Failed'}
+                        </span>
+                      </div>
+                    )}
+                    {pendingApproval.plan && (
+                      <>
+                        <div className="flex justify-between">
+                          <span className="text-neutral-500">Product</span>
+                          <span className="font-medium">{pendingApproval.plan.parameters?.product || '—'}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-neutral-500">Qty</span>
+                          <span className="font-medium">{pendingApproval.plan.quantity || 1}</span>
+                        </div>
+                        {pendingApproval.facts.stock?.totalPrice && (
+                          <div className="flex justify-between border-t border-amber-200 pt-1 mt-1">
+                            <span className="text-neutral-500 font-medium">Total</span>
+                            <span className="font-bold">${pendingApproval.facts.stock.totalPrice.toFixed(2)}</span>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+                {!pendingApproval.facts && (
+                  <p className="text-neutral-700">{pendingApproval.orderSummary}</p>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleApprove}
+                    className="flex-1 bg-green-600 text-white py-1.5 text-xs font-bold uppercase hover:bg-green-700 transition-colors"
+                  >
+                    Approve
+                  </button>
+                  <button
+                    onClick={handleDecline}
+                    className="flex-1 bg-red-600 text-white py-1.5 text-xs font-bold uppercase hover:bg-red-700 transition-colors"
+                  >
+                    Decline
+                  </button>
+                </div>
+              </div>
+            )}
+
             {loading && (
               <div className="flex gap-2.5">
                 <div className="w-7 h-7 bg-sole-red flex items-center justify-center shrink-0">
@@ -210,14 +379,14 @@ export default function Chatbot() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Type a message..."
-              disabled={loading}
+              disabled={loading || !!pendingApproval}
               className="flex-1 border border-neutral-300 px-3 py-2 text-sm focus:outline-none focus:border-black transition-colors"
             />
             <button
               onClick={handleSend}
-              disabled={loading || !input.trim()}
+              disabled={loading || !!pendingApproval || !input.trim()}
               className={`px-4 py-2 font-bold uppercase text-xs tracking-wider transition-colors ${
-                loading || !input.trim()
+                loading || !!pendingApproval || !input.trim()
                   ? "bg-neutral-200 text-neutral-400 cursor-not-allowed"
                   : "bg-black text-white hover:bg-sole-red"
               }`}
